@@ -1,0 +1,1355 @@
+
+
+# Load packages
+
+```{r, warning=FALSE, echo=FALSE, output = FALSE}
+library(flextable)
+library(table1)
+library(dplyr)
+library(tibble)
+library(officer)
+library(tidyverse)
+library(here)
+library(purrr, include.only = "reduce")
+library(ggplot2)
+library(mice)
+library(miceadds)
+library(miceafter)
+library(expss, include.only = "apply_labels")
+library(ggplot2)
+```
+
+
+# Load cleaned data and custom functions
+
+```{r}
+#| warning: false
+# Load mice imputation output
+load(here::here("data", "ucla_ls_scale_mice_output.RData"))
+```
+
+```{r}
+# Variable labels
+all_labels <- read.csv(here::here("ucla_variable_labels.csv"))
+```
+
+<https://www.rdocumentation.org/packages/mice/versions/3.16.0/topics/mice>
+<https://datascienceplus.com/imputing-missing-data-with-r-mice-package/>
+<https://stefvanbuuren.name/fimd/sec-diagnostics.html>
+<file:///C:/Users/ebiek/OneDrive%20-%20UTHealth%20Houston/Cannell%20lab/mice_Multivariate%20Imputation%20by%20Chained%20Equations%20in%20R.pdf>
+
+As a general rule, imputations are not to be aggregated. Instead, one should pool the analysis estimates.
+<https://stackoverflow.com/questions/72578388/calculate-averages-of-imputed-data-in-mice>
+<https://stefvanbuuren.name/RECAPworkshop/Practicals/RECAP_Practical_II.html>
+<https://stackoverflow.com/questions/55926293/descriptive-data-with-mice-miceadds>
+<https://www.bookdown.org/rwnahhas/RMPH/mi-descriptives.html> The one!
+<https://bookdown.org/mwheymans/bookmi/data-analysis-after-multiple-imputation.html> also this!
+<https://stackoverflow.com/questions/75413995/pooling-counts-for-a-categorical-variable-ater-mi>
+<https://stefvanbuuren.name/fimd/sec-pooling.html> also this
+
+Pooling p-values
+<https://stackoverflow.com/questions/73323019/mice-paired-sample-t-test-and-cohens-d-estimation-using-imputed-datasets>
+<https://stats.stackexchange.com/questions/69130/how-to-get-pooled-p-values-on-tests-done-in-multiple-imputed-datasets>
+Pooled chi-square
+<https://nerler.github.io/EP16_Multiple_Imputation/slide/08_analysis_and_pooling.pdf>
+
+## Extract mice out put dataframe in long format
+
+```{r}
+mice_out_df <- complete(mice_out,"long", include=TRUE) %>% 
+  rename(
+    impute = ".imp",
+    org_row_id = ".id"
+  )
+names(mice_out_df)
+```
+
+
+# Create calculated/ derived variables
+
+```{r}
+mice_out_df_dum <- mice_out_df %>%
+  mutate(
+    # 7 category loneliness variable
+    ls_total_9cat_f = factor(ls_total),
+    # Binary loneliness variable
+    loneliness_det_2cat_f = case_when(
+      ls_total <= 5 ~ 0,
+      ls_total > 5  ~ 1
+    ),
+    loneliness_det_2cat_f = factor(loneliness_det_2cat_f,
+                                   levels = c(0,1),
+                                   labels = c("Not lonely", "Lonely")),
+    # UCLA binary (3 vs other values)
+    ucla3_2cat = case_when(
+      ls_total == 3 ~ 1,
+      ls_total > 3 ~ 0
+    ),
+    # Binary GDS variable 
+    depres_det_2cat_f = case_when(
+      gds_total < 5 ~ 0,
+      gds_total >= 5  ~ 1
+    ),
+    depres_det_2cat_f = factor(depres_det_2cat_f,
+                                   levels = c(0,1),
+                                   labels = c("Normal", "Depressed")),
+    # MOS Variables to labelled factors
+    across(
+      .cols = starts_with("outcomes_"),
+      .fns = ~factor(.x,
+                     levels = c(1,2,3,4,5),
+                     labels = c("All of the time", "Most of the time", 
+                                "Some of the time", "A little of the time",
+                                "None of the time")),
+      .names = "{col}_f"
+    ),
+    # Sociodemographic Information Variables
+    sode_race_eth_4cat_f = factor(
+      sode_race_eth_4cat,
+      levels = c(1:4),
+      labels = c("Hispanic, any race", "Black, non-Hispanic", 
+                 "White, non-Hispanic", 
+                 "Other race or multiple races, non-Hispanic")
+    ),
+    hispanic = ifelse(sode_race_eth_4cat_f == "Hispanic, any race", 1,0),
+    black = ifelse(sode_race_eth_4cat_f == "Black, non-Hispanic", 1,0),
+    white = ifelse(sode_race_eth_4cat_f == "White, non-Hispanic", 1,0),
+    other_race = ifelse(
+      sode_race_eth_4cat_f == "Other race or multiple races, non-Hispanic", 1,0
+      ),
+    across(
+      .cols = c(hispanic, black, white, other_race),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+    ),
+    sogi_orientation_4cat_f = factor(
+      sogi_orientation_6cat,
+      levels = c(1:6),
+      labels = c("Straight/heterosexual", "Gay man", "Lesbian/gay woman", 
+                 "Bisexual", "Queer", "Other")
+    ),
+    straight = ifelse(sogi_orientation_4cat_f == "Straight/heterosexual", 1,0),
+    gay_man = ifelse(sogi_orientation_4cat_f == "Gay man", 1,0),
+    lesbian = ifelse(sogi_orientation_4cat_f == "Lesbian/gay woman", 1,0),
+    bisexual = ifelse(sogi_orientation_4cat_f == "Bisexual", 1,0),
+    other_or = ifelse(sogi_orientation_4cat_f == "Queer" | 
+                     sogi_orientation_4cat_f == "Other", 1,0),
+    across(
+      .cols = c(straight, gay_man, lesbian, bisexual, other_or),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+    ),
+    sode_marital_6cat_f = factor(
+      sode_marital_6cat,
+      levels = c(1:6),
+      labels = c("Married", "Living as an unmarried or common law couple",
+                 "Separated", "Divorced", "Widowed", "Single, or never married")
+    ),
+    married = ifelse(sode_marital_6cat_f == "Married", 1,0),
+    common_law = ifelse(
+      sode_marital_6cat_f == "Living as an unmarried or common law couple", 1,0
+      ),
+    separated = ifelse(sode_marital_6cat_f == "Separated", 1,0),
+    divorced = ifelse(sode_marital_6cat_f == "Divorced", 1,0),
+    widowed = ifelse(sode_marital_6cat_f == "Widowed", 1,0),
+    single = ifelse(sode_marital_6cat_f == "Single, or never married", 1,0),
+    across(
+      .cols = c(married, common_law, separated, divorced, widowed, single),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      ) 
+    ),
+    sode_marital_2cat_f = case_when(
+      sode_marital_6cat_f == "Married" | 
+        sode_marital_6cat_f == "Living as an unmarried or common law couple"~ 1,
+      TRUE                                                                  ~ 0
+    ), 
+    sode_marital_2cat_f = factor(
+      sode_marital_2cat_f,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+    ),
+    live_alone_2cat_f = case_when(
+      sode_people_9cat == 1 ~ 1,
+      sode_people_9cat > 1  ~ 0
+    ),
+    live_alone_2cat_f = factor(
+      live_alone_2cat_f,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+    ),
+   sode_school_7cat_f = factor(
+     sode_school_7cat,
+     levels = c(1:7),
+     labels = c("Some high school (no diploma)", "High school graduate",
+                "Some college (no degree)", "Associate’s degree", 
+                "Bachelor’s degree (BA, AB, BS, etc.)", 
+                "Some graduate or professional school (no degree)",
+                "Graduate or professional school degree (MS, MA, MD, PhD, etc.)"
+                )
+   ),
+   some_high_school = ifelse(
+     sode_school_7cat_f == "Some high school (no diploma)", 1,0
+     ),
+   high_school = ifelse(sode_school_7cat_f == "High school graduate", 1,0),
+   some_college = ifelse(sode_school_7cat_f == "Some college (no degree)", 1,0),
+   associate = ifelse(sode_school_7cat_f == "Associate’s degree", 1,0),
+   bachelor = ifelse(
+     sode_school_7cat_f == "Bachelor’s degree (BA, AB, BS, etc.)", 1,0
+     ),
+   some_graduate = ifelse(
+     sode_school_7cat_f == "Some graduate or professional school (no degree)", 
+     1,0),
+   graduate = ifelse(
+     sode_school_7cat_f == 
+       "Graduate or professional school degree (MS, MA, MD, PhD, etc.)", 1,0),
+    across(
+      .cols = c(some_high_school, high_school, some_college, associate, bachelor,
+                some_graduate, graduate),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+    ),
+   sode_employed_9cat_f = factor(
+     sode_employed_9cat,
+     levels = c(1:9),
+     labels = c("Employed full time", "Employed part time", "In the military",
+                "Unemployed", "Retired", "A student", "A homemaker", 
+                "Disabled or unable to work", "Something else")
+   ),
+   full_time = ifelse(sode_employed_9cat_f == "Employed full time", 1,0),
+   part_time = ifelse(sode_employed_9cat_f == "Employed part time", 1,0),
+   in_military = ifelse(sode_employed_9cat_f == "In the military", 1,0),
+   unemployed = ifelse(sode_employed_9cat_f == "Unemployed", 1,0),
+   retired = ifelse(sode_employed_9cat_f == "Retired", 1,0),
+   student = ifelse(sode_employed_9cat_f == "A student", 1,0),
+   homemaker = ifelse(sode_employed_9cat_f == "A homemaker", 1,0),
+   disabled = ifelse(sode_employed_9cat_f == "Disabled or unable to work", 1,0),
+   other_emp = ifelse(sode_employed_9cat_f == "Something else", 1,0),
+   across(
+      .cols = c(full_time, part_time, in_military, unemployed, retired, student,
+                homemaker, disabled, other_emp),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+   ),
+   sode_income_7cat_f = factor(
+     sode_income_7cat,
+     levels = c(1:7),
+     labels = c("$10,000 or less", "Between $10,001 and $20,000", 
+                "Between $20,001 and $35,000", "Between $35,001 and $50,000",
+                "Between $50,001 and $75,000", "Between $75,001 and $100,000",
+                "More than $100,000")
+   ),
+   inc_10 = ifelse(sode_income_7cat_f == "$10,000 or less", 1,0),
+   inc_20 = ifelse(sode_income_7cat_f == "Between $10,001 and $20,000", 1,0),
+   inc_35 = ifelse(sode_income_7cat_f == "Between $20,001 and $35,000", 1,0),
+   inc_50 = ifelse(sode_income_7cat_f == "Between $35,001 and $50,000", 1,0),
+   inc_75 = ifelse(sode_income_7cat_f == "Between $50,001 and $75,000", 1,0),
+   inc_100 = ifelse(sode_income_7cat_f == "Between $75,001 and $100,000", 1,0),
+   inc_above_100 = ifelse(sode_income_7cat_f == "More than $100,000", 1,0),
+   across(
+      .cols = starts_with("inc_"),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+   ),
+   sode_military_2cat_f = factor(
+     sode_military_2cat,
+     levels = c(1,0),
+     labels = c("Yes", "No")
+   ),
+   female = ifelse(sex_2cat_f == "Female", 1,0), 
+   male = ifelse(sex_2cat_f == "Male", 1,0),
+   across(
+      .cols = c(male, female),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+   ),
+    age_4cat_f = case_when(
+      age >= 65 & age < 75 ~ "65-74",
+      age >= 75 & age < 85 ~ "75-84",
+      age >= 85 & age < 95 ~ "85-94",
+      age >= 95            ~ "95+"
+    ),
+    age_4cat_f = factor(age_4cat_f, 
+                        levels = c("65-74", "75-84", "85-94", "95+")
+                        ),
+   age_65_74 = ifelse(age >= 65 & age < 75, 1,0),
+   age_75_84 = ifelse(age >= 75 & age < 85, 1,0),
+   age_85_94 = ifelse(age >= 85 & age < 95, 1,0),
+   age_95 = ifelse(age >= 95, 1,0),
+   across(
+      .cols = c(age_65_74, age_75_84, age_85_94, age_95),
+      .fns = ~factor(.x,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+      )
+   ),
+   over_65_abuse_any_2cat_f = factor(
+     over_65_abuse_any_2cat,
+        levels = c(0,1),
+        labels = c("No", "Yes")
+   )
+  ) %>% select(-c(starts_with("outcomes_") & ends_with("cat")
+                  ))
+
+# Relevel sode_military_2cat_f
+mice_out_df_dum$sode_military_2cat_f <- relevel(
+  mice_out_df_dum$sode_military_2cat_f, ref = "No"
+  )
+```
+
+
+# List of variables for each data type
+
+```{r}
+# Loneliness scale variables
+ls_vars <- c("ls_total", "ls_total_9cat_f", "loneliness_det_2cat_f")
+
+# 3 Item Pain Assessment Scale
+peg_vars <- c("peg_total")
+
+# Geriatric Depression Scale
+gds_vars <- c("gds_total", "depres_det_2cat_f")
+
+# Medical Outcomes Study
+mos_vars <- c("outcomes_month_social_5cat_f", "outcomes_month_nervous_5cat_f",
+              "outcomes_month_calm_5cat_f", "outcomes_month_blue_5cat_f", 
+              "outcomes_month_happy_5cat_f")
+
+# Sociodemographic Information 
+
+## Race/ Ethnicity
+race_vars <- c("hispanic", "black", "white", "other_race")
+
+## Sexual orientation
+so_vars <- c("straight", "gay_man", "lesbian", "bisexual", "other_or")
+
+## Marital status
+mar_vars <- c("married", "common_law", "separated", "divorced", "widowed", "single", 
+              "sode_marital_2cat_f")
+
+## Household size
+house_vars <- c("sode_people_9cat", "live_alone_2cat_f")
+
+## Education status
+edu_vars <- c("some_high_school", "high_school", "some_college", "associate", "bachelor", 
+              "some_graduate", "graduate")
+
+## Employment status
+job_vars <- c("full_time", "part_time", "in_military", "unemployed", "retired", "student", 
+  "homemaker", "disabled", "other_emp")
+
+## Income
+income_vars <- c("inc_10", "inc_20", "inc_35", "inc_50", "inc_75", "inc_100", "inc_above_100")
+
+## Military status
+mil_vars <- c("sode_military_2cat_f")
+
+# Sex
+sex_vars <- c("sex_2cat_f")
+
+# Age
+age_vars <- c("age", "age_65_74", "age_75_84", "age_85_94", "age_95"
+)
+
+soc_vars <- c(race_vars, so_vars, mar_vars, house_vars, 
+                                     edu_vars, job_vars, income_vars, mil_vars,
+                                     sex_vars, age_vars)
+
+# Abuse Self Report
+sr_vars <- c("over_65_abuse_any_2cat_f")
+
+all_pred_vars <- c(soc_vars, sr_vars, peg_vars, gds_vars, mos_vars, "total_py_visits")
+```
+
+
+# Original data
+
+```{r}
+original <- mice_out_df_dum %>% filter(impute == 0)
+```
+
+## Functions
+
+### P-value
+
+```{r}
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    tryCatch(
+      {
+        if (is.numeric(y)) {
+          # For numeric variables, perform a standard 2-sample t-test
+          p <- t.test(y ~ g)$p.value
+          } else {
+            # For categorical variables, perform a chi-squared test of independence
+            p <- chisq.test(table(y, g))$p.value
+            }
+        # The initial empty string places the output on the line below the variable label.
+        if(p > 0.2){
+          c("", format(round(p, 2), nsmall = 2))
+        }else if(p <= 0.2 & p > 0.05){
+          c("", format(round(p, 3), nsmall = 3))
+        }else if(p <= 0.05 & p > 0.01){
+          c("", paste(format(round(p, 3), nsmall = 3), "*"))
+        }else if((p <= 0.01 & p > 0.001)){
+          c("", paste(format(round(p, 3), nsmall = 3), "**"))
+        }else if(p <= 0.001){
+          c("", paste("< 0.001 ***"))
+        }
+        
+        },
+      error=function(e) {
+        message('An Error Occurred')
+        print(e)
+        return(NA)
+        },
+      # If warning is produced with Chi-squared test, use fisher's test
+      warning=function(w) {
+        if(w$message == "Chi-squared approximation may be incorrect"){
+          p <- fisher.test(table(y, g))$p.value
+        if(p > 0.2){
+          c("", format(round(p, 2), nsmall = 2))
+        }else if(p <= 0.2 & p > 0.05){
+          c("", format(round(p, 3), nsmall = 3))
+        }else if(p <= 0.05 & p > 0.01){
+          c("", paste(format(round(p, 3), nsmall = 3), "*"))
+        }else if((p <= 0.01 & p > 0.001)){
+          c("", paste(format(round(p, 3), nsmall = 3), "**"))
+        }else if(p <= 0.001){
+          c("", paste("< 0.001 ***"))
+        }
+        
+        }
+        }
+    )
+}
+```
+
+### Statistical test
+
+```{r}
+test <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    tryCatch(
+      {
+        if (is.numeric(y)) {
+          test <- "T-test"
+          } else {
+            # For categorical variables, perform a chi-squared test of independence
+            p <- chisq.test(table(y, g))$p.value
+            test <- "Chi-squared test"
+            }
+        c("", test)
+        },
+      error=function(e) {
+        message('An Error Occurred')
+        print(e)
+        return(NA)
+        },
+      warning=function(w) {
+        if(w$message == "Chi-squared approximation may be incorrect"){
+          test <- "Fisher's exact test"
+          c("", test)
+        }
+        }
+    )
+}
+```
+
+### Formatting continupus variables
+
+```{r}
+my_render_cont <- function(x) {
+    with(stats.default(x), 
+         c("",
+           
+          "Mean (SD)" = sprintf("%s (%s)",
+                                round_pad(MEAN, 1),
+                                round_pad(SD, 1)),
+         
+          "Median [Min, Max]" = sprintf("%s [%s, %s]",
+                                       round_pad(MEDIAN, 0), 
+                                       round_pad(MIN, 0), 
+                                       round_pad(MAX, 0)))
+    )
+}
+```
+
+
+### Add variable labels
+
+```{r}
+add_labs <- function(label_df, df){
+  labels_named_vec <- setNames(label_df[["label"]], label_df[["var"]]) %>% as.list() 
+  result <- apply_labels(df, labels_named_vec)
+}
+```
+
+### Create a formula
+
+```{r}
+create_formula <- function(predictors, target){
+  pt_formula <- ""
+  z <- length(predictors)
+  for (p in predictors){
+    if(p == predictors[[z]]){
+      formula_ip <- paste(noquote(p))
+    } else{
+      formula_ip <- paste(noquote(p), "+ ")
+    }
+    pt_formula <- paste0(pt_formula, formula_ip)
+  }
+  pt_formula <- as.formula(paste0("~ ", pt_formula, " | ", target))
+  pt_formula
+}
+```
+
+### Create and format flextable
+
+```{r}
+desc_flex <- function(df, pred_vars){
+  table1(create_formula(pred_vars, "loneliness_det_2cat_f"),
+    data = df, overall = F, render.continuous = my_render_cont,
+    extra.col=list(`Test` = test, `P-value`= pvalue)
+    ) %>% t1flex(tablefn = c("qflextable", "flextable", "regulartable")) %>% 
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = 1, width = 2) %>%
+  add_footer_lines("Individuals with UCLA loneliness scale total scores greater or equal to 5 are classified as lonely") %>%
+  fontsize(size = 9, part = "footer") %>%
+  italic(part = "footer")
+}
+```
+
+```{r}
+original <- add_labs(all_labels, original)
+```
+
+## Loneliness Data (target)
+
+```{r}
+ls_tab <- table1(~ls_total + ls_total_9cat_f,
+       data = original
+    ) %>% 
+  t1flex(tablefn = c("qflextable", "flextable", "regulartable")) %>% 
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = 1, width = 2) %>%
+  fontsize(size = 9, part = "footer") %>%
+  italic(part = "footer")
+
+ls_tab
+```
+
+## Predictors
+
+```{r}
+original_tab <- desc_flex(original, all_pred_vars)
+
+original_tab
+```
+
+
+```{r}
+quintile_ls <- quantile(original$ls_total, prob=c(0.2,0.4,0.6,0.8, 1), type=1)
+
+ls_plot <- ggplot(original, aes(ls_total)) +
+  geom_histogram(binwidth = 1) +
+  xlab("3-Item UCLA Loneliness Scale Score Total") +
+  ylab("Count") +
+  geom_vline(aes(xintercept = quintile_ls[4])) +
+  geom_text(aes(x = quintile_ls[4], label = "\n4th quintile", y = 100), colour="blue", angle=90) +
+  theme(legend.position="none")
+
+ls_plot
+```
+
+# Imputed data + non-imputed
+
+## List of imputed datasets
+
+```{r}
+imp_df <- mice_out_df_dum %>% filter(impute != 0)
+
+imp_list <- imp_df %>%
+ group_split(impute, .keep = FALSE)
+```
+
+# List of variables with and without missing data
+
+## Without missing
+
+```{r}
+no_missing <- c("sex_2cat_f", "age", "age_65_74", "age_75_84", "age_85_94",
+                "age_95", "total_py_visits")
+```
+
+## With missing
+
+```{r}
+has_missing <- all_pred_vars[!(all_pred_vars %in% no_missing)]
+
+has_missing
+```
+
+# Predictors without missing data
+
+```{r}
+no_missing_tab <- desc_flex(original, no_missing)
+
+no_missing_tab
+```
+
+
+## Functions
+
+### Pooling resultd for categorical variables
+Chisquare and Fisher's test
+<https://stefvanbuuren.name/fimd/sec-multiparameter.html#sec:chi> Citation for converting p-values to z-scores and then back
+
+Rubin's rules <https://bookdown.org/mwheymans/bookmi/rubins-rules.html>
+
+```{r}
+pooled_imp_desc_table_cat <- function(imp_list, x, group_var){
+  lonely_perc <- NULL
+  not_lonely_perc <- NULL
+  
+  # Fishers test only
+  fish_p_vals <- c()
+  
+  # Chi-square test only
+  chi_sqs <- c()
+  d_frs <- c()
+  
+  for(imp in imp_list){
+    stat_test <- tryCatch(
+        {
+          chisq.test(table(imp[[x]], imp[[group_var]]), correct = FALSE)
+        },
+        error=function(e) {
+          message('An Error Occurred')
+          print(e)
+          return(NA)
+          },
+        # If warning is produced with Chi-squared test, use fisher's test
+        warning=function(w) {
+          if(w$message == "Chi-squared approximation may be incorrect"){
+            fisher.test(table(imp[[x]], imp[[group_var]]))
+          }
+          }
+        )
+    
+    if(grepl("Fisher", stat_test$method) == TRUE){
+      test_name <- "Fisher's test"
+      fish_p_val <- stat_test$p.value
+      fish_p_vals <- c(fish_p_vals, fish_p_val)
+      
+    }else if(grepl("Pearson's Chi-squared", stat_test$method) == TRUE){ 
+      test_name <- "Chi-square test"
+      chi_sq <- as.numeric(stat_test$statistic)
+      chi_sqs <- c(chi_sqs, chi_sq)
+      # Get degrees of freedom to calculate variance for chi-square test
+      tbl <- table(imp[[x]], imp[[group_var]])
+      d_fr <- (nrow(tbl) - 1) * (ncol(tbl) - 1)
+      d_frs <- c(d_frs, d_fr) 
+    }
+  }
+  # Calculate the pooled p-values
+  
+  if(test_name == "Fisher's test"){
+    # Calculate pooled p-values by taking the median
+    p_value <- median(fish_p_vals)
+    } 
+  else if(test_name == "Chi-square test"){
+    # Obtain the pooled p-value 
+    out <- micombine.chisquare(dk = chi_sqs, df = d_frs[1], display = FALSE)
+    p_value <- as.numeric(out[["p"]])
+  }
+  
+  # Create summary data frame
+  sum_df <- imp_list[[1]] %>%
+    reframe(
+      var = x,
+      .data[[x]],
+      est_name = "proportion",
+      stat_name = test_name,
+      pvalue = p_value
+    ) %>% distinct() %>%
+    rename(group = x)
+    
+    for(imp in imp_list){
+      # Get data summary
+      est_perc <- imp %>%
+        reframe(
+          var = x,
+          est_name = "proportion",
+          est = n(), .by = c(group_var, x),
+        ) %>% distinct() %>%
+        rename(group = x) %>% tidyr::pivot_wider(names_from = group_var,
+                                                          values_from =  est, 
+                                                 values_fill = 0
+                                                 ) %>%
+        rename_with(
+          .cols = !(c(group, est_name, var)),
+          .fn = ~ gsub(" ", "_", tolower(.x))
+        ) %>%
+        mutate(
+          across(
+            .cols = !(c(group, est_name, var)),
+            .fns = ~ (.x/sum(.x))*100,
+            .names = "est_{col}"
+          )
+        )
+      
+      lonely_perc <- cbind(lonely_perc, est_perc[["est_lonely"]])
+      not_lonely_perc <- cbind(not_lonely_perc, est_perc[["est_not_lonely"]])
+    }
+  
+  # Pooled proportions
+  # Pooled estimates
+  lonely_perc_pool <- apply(lonely_perc, 1, mean)
+  not_lonely_perc_pool <- apply(not_lonely_perc, 1, mean)
+  
+  # Add pooled proportions to dataframe
+  sum_df <- cbind(sum_df, lonely_perc_pool, not_lonely_perc_pool) %>% 
+    as.data.frame() %>% 
+    # Order by category level
+    arrange(group)
+
+  sum_df
+}
+```
+
+### Pooling t-test results for numeric variables
+
+```{r}
+pooled_imp_desc_table_num <- function(imp_list, imp_df, x, group_var){
+  
+  sd_lonely <- NULL
+  sd_not_lonely <- NULL
+  est_lonely <- NULL
+  est_not_lonely <- NULL
+  min_lonely <- NULL
+  min_not_lonely <- NULL
+  max_lonely <- NULL
+  max_not_lonely <- NULL
+  
+  # Get pooled p-values
+  milist <- df2milist(imp_df, impvar = "impute")
+  paste_expr <- paste0("expr = ", "t_test(", x, " ~ ", group_var, ")")
+  res_stats <- with(data = milist,
+  expr = eval(parse(text = paste_expr)))
+  res <- pool_t_test(res_stats, statistic = TRUE)
+  pvalue <- res[7]
+  
+  for(imp in imp_list){
+    # Compute the means, min, max and medians
+    sum_df <- imp %>%
+      reframe(
+        var = x,
+        est_name = "mean",
+        stat_name = "T-test",
+        max = max(.data[[x]]),
+        min = min(.data[[x]]),
+        sdev = sd(.data[[x]]),
+        est = mean(.data[[x]]), .by = group_var
+      ) %>% tidyr::pivot_wider(
+        names_from = group_var, values_from = c(min, max, sdev, est), 
+        values_fill = 0) %>%
+      rename_with(
+        .cols = !(c(est_name)),
+        .fn = ~ gsub(" ", "_", tolower(.x))
+      )
+    est_lonely <- cbind(est_lonely, sum_df[["est_lonely"]])
+    est_not_lonely <- cbind(est_not_lonely, sum_df[["est_not_lonely"]])
+    sd_lonely <- cbind(sd_lonely, sum_df[["sdev_lonely"]])
+    sd_not_lonely <- cbind(sd_not_lonely, sum_df[["sdev_not_lonely"]])
+    min_lonely <- cbind(min_lonely, sum_df[["min_lonely"]])
+    min_not_lonely <- cbind(min_not_lonely, sum_df[["min_not_lonely"]])
+    max_lonely <- cbind(max_lonely, sum_df[["max_lonely"]])
+    max_not_lonely <- cbind(max_not_lonely, sum_df[["max_not_lonely"]])
+    
+    sum_df <- sum_df %>% select(-c(est_lonely, est_not_lonely, sdev_lonely,
+                                   sdev_not_lonely, min_lonely, min_not_lonely,
+                                   max_lonely, max_not_lonely))
+  }
+    
+  # Pooled estimates (means, max, min, medians and standard deviations)
+  max_max_lonely <- apply(max_lonely, 1, max)
+  max_max_not_lonely <- apply(max_not_lonely, 1, max)
+  min_min_lonely <- apply(min_lonely, 1, min)
+  min_min_not_lonely <- apply(min_not_lonely, 1, min)
+  est_lonely_pool <- apply(est_lonely, 1, mean)
+  est_not_lonely_pool <- apply(est_not_lonely, 1, mean)
+  sd_lonely_pool <- apply(sd_lonely, 1, mean)
+  sd_not_lonely_pool <- apply(sd_not_lonely, 1, mean)
+
+  sum_df <- cbind(sum_df, min_min_lonely, min_min_not_lonely, max_max_lonely, 
+                  max_max_not_lonely, est_lonely_pool, est_not_lonely_pool, 
+                  sd_lonely_pool, sd_not_lonely_pool, pvalue) %>% 
+    as.data.frame()
+
+  sum_df
+  
+}
+```
+
+## Combining all pooled results into single table
+
+```{r}
+all_vars <- list()
+for(p in has_missing){
+  if(is.numeric(imp_list[[1]][[p]]) == TRUE){
+    p_sum <- pooled_imp_desc_table_num(imp_list, imp_df, p, 
+                                       "loneliness_det_2cat_f") %>%
+      mutate(
+        ct_lonely = paste0(format(round(est_lonely_pool, 1), nsmall = 1),
+                        " (", format(round(sd_lonely_pool, 1), nsmall = 1), ")"),
+        ct_notlonely = paste0(format(round(est_not_lonely_pool, 1), nsmall = 1),
+                        " (", format(round(sd_not_lonely_pool, 1), nsmall = 1), ")"),
+        range_lonely = paste0("[", min_min_lonely, ", ", max_max_lonely, "]"),
+        range_notlonely = paste0("[", min_min_not_lonely, ", ", 
+                                    max_max_not_lonely, "]")
+      ) %>%
+      pivot_longer(c(ct_lonely, range_lonely, ct_notlonely, range_notlonely), 
+                   names_to = c("group_sum_stat",
+                   ".value"), names_sep="_") %>% 
+      mutate(
+        group_sum_stat = case_when(
+          group_sum_stat == "ct" ~ "Mean (SD)",
+          group_sum_stat == "range" ~ "[Min, Max]"
+        )
+      ) %>%
+      rename(not_lonely = notlonely) %>%
+      select(var, est_name, group_sum_stat, not_lonely, lonely, stat_name, pvalue)
+  }
+  else if(is.factor(imp_list[[1]][[p]]) == TRUE){
+    p_sum <- pooled_imp_desc_table_cat(imp_list, p, "loneliness_det_2cat_f") %>%
+      mutate(
+        lonely = paste0(format(round(lonely_perc_pool, 1), nsmall = 1), "%"),
+        not_lonely = paste0(format(round(not_lonely_perc_pool, 1), nsmall = 1), 
+                            "%")) %>% rename(
+        group_sum_stat = group
+        ) %>%
+      select(var, est_name, group_sum_stat, not_lonely, lonely, stat_name, pvalue)   
+  }
+  all_vars <- append(all_vars, list(p_sum))
+}
+
+all_vars <- dplyr::bind_rows(all_vars)
+```
+
+## Format columns to prepare for flextable
+
+```{r}
+sum_table <- all_vars %>%
+  mutate(
+    pvalue = case_when(
+      pvalue > 0.2 ~ format(round(pvalue, 2), nsmall = 2),
+      pvalue <= 0.2 & pvalue > 0.05 ~ format(round(pvalue, 3), nsmall = 3),
+      (pvalue <= 0.05 & pvalue > 0.01) ~
+        paste(format(round(pvalue, 3), nsmall = 3), "*"),
+      (pvalue <= 0.01 & pvalue > 0.001) ~
+        paste(format(round(pvalue, 3), nsmall = 3), "**"),
+      pvalue <= 0.001 ~ paste("< 0.001 ***")
+      )
+  ) %>% left_join(all_labels, by = "var") %>% relocate(label) %>% 
+  select(-c(var, est_name)) %>% 
+  # Group by label to keep each label on a separate line in flextable
+  group_by(label) %>%
+  mutate(
+    label = str_wrap(label, width = 20),
+    label_no = cur_group_id()
+  ) %>% 
+  as_grouped_data(groups = "label")
+
+prep_table <- bind_cols(sum_table, row_no = c(1:nrow(sum_table)))
+```
+
+## Creating flextable
+
+```{r}
+# Create a list of row numbers to guide merging
+
+label_row_df <- prep_table %>% select(row_no, label_no)
+
+groups <- label_row_df %>% select(label_no) %>% filter(!is.na(label_no)) %>% 
+  distinct() %>% unlist %>% as.numeric()
+
+start_stop <- list()
+
+for(g in groups){
+  start <- min(label_row_df$row_no[label_row_df$label_no == g], na.rm = TRUE) 
+  stop <- max(label_row_df$row_no[label_row_df$label_no == g], na.rm = TRUE)
+  ss <- list(start, stop)
+  start_stop <- append(start_stop, list(ss))
+}
+
+```
+
+```{r}
+ft <- prep_table %>% 
+  as_flextable() %>%
+  flextable::compose(
+    i = ~ !is.na(label), # when var_group not NA
+    j = "group_sum_stat", # on column "var"
+    # create a paragraph containing a chunk containing value of `label`
+    value = as_paragraph(as_chunk(label))
+    ) %>% 
+  width(width = 1) %>%
+  set_header_labels(group_sum_stat = "",
+                    lonely = "Lonely\n (pooled estimates)",
+                    not_lonely = "Not lonely \n(pooled estimates)",
+                    stat_name = "Test",
+                    pvalue = "P-value\n (pooled estimate)") %>%
+  bold(i = ~ !is.na(label)) %>%
+  align(i = ~ !is.na(label), align = "left") %>%
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = 1, width = 2) %>%
+  delete_columns(j = 6)
+
+for(j in 4:5){
+  for(s in start_stop){
+    ft <-  merge_at(ft, i = s[[1]]:s[[2]], j = j)
+  }  
+}
+
+ft
+```
+
+# Logistic Regression >= 5
+
+
+```{r}
+# Convert long format back to mids object
+imp_mids <- as.mids(mice_out_df_dum, .imp = "impute", .id = "org_row_id")
+```
+
+
+```{r}
+# Create lists of variables for logistic models
+model_soc_vars <- c("hispanic", "black", "white", "other_race", "straight",
+                    "gay_man", "lesbian", "bisexual", "other_or", "married",
+                    "common_law", "separated", "divorced", "widowed", "single",
+                    "sode_marital_2cat_f", "sode_people_9cat", 
+                    "some_high_school", "high_school", "some_college", 
+                    "associate", "bachelor", "some_graduate", "graduate",
+                    "sode_employed_9cat_f",
+                    "inc_10", "inc_20", "inc_35", "inc_50", "inc_75", "inc_100", 
+                    "inc_above_100", "sode_military_2cat_f", "sex_2cat_f", "age"
+                    )
+
+model_soc_vars_multi <- c(
+  "hispanic", "black", "other_race", "gay_man", "lesbian", 
+  "bisexual", "other_or", "common_law", "separated", "divorced", 
+  "widowed", "single", "sode_people_9cat", "high_school", "some_college", "associate", "bachelor", 
+  "some_graduate", "graduate", "inc_20", "inc_35", "inc_50", "inc_75", "inc_100", 
+  "inc_above_100", "sode_military_2cat_f", "sex_2cat_f", "age"
+  )
+
+references <- c("white", "straight", "married", "some_high_school", "inc_10")
+
+intra_vars <- c(peg_vars, "gds_total", mos_vars)
+
+inter_vars <- c(sr_vars, "total_py_visits")
+
+multi_model_vars <- c(model_soc_vars, intra_vars, inter_vars)
+
+
+```
+
+## Univariate logistic regression
+
+```{r}
+log_results <- lapply(multi_model_vars, function(predictor) {
+    glm_out <- with(imp_mids, glm(loneliness_det_2cat_f ~ 
+        eval(parse(text = predictor)), 
+        family = binomial(link = 'logit')))
+    summary_glm <- summary(pool(glm_out), conf.int = T)  %>% as.data.frame() %>% 
+    janitor::clean_names() %>%
+    mutate(
+      var = predictor
+    ) %>%
+    relocate(var)
+  })
+
+# Combine the results into a list
+glm_out_df<- do.call(rbind, log_results) %>% as.data.frame()
+```
+
+```{r}
+summary_glm_uni <- glm_out_df %>%
+  # Remove intercept rows
+  filter(term != "(Intercept)") %>%
+  mutate(
+    or = format(round(exp(estimate), 2), nsmall = 2),
+    std_error = format(round(std_error, 3), nsmall = 3),
+    p_value = case_when(
+      p_value > 0.2 ~ format(round(p_value, 2), nsmall = 2),
+      p_value <= 0.2 & p_value > 0.05 ~ format(round(p_value, 3), nsmall = 3),
+      (p_value <= 0.05 & p_value > 0.01) ~
+        paste(format(round(p_value, 3), nsmall = 3), "*"),
+      (p_value <= 0.01 & p_value > 0.001) ~
+        paste(format(round(p_value, 3), nsmall = 3), "**"),
+      p_value <= 0.001 ~ paste("< 0.001 ***")
+      ),
+    l_or = format(round(exp(x2_5_percent), 2), nsmall = 2),
+    u_or = format(round(exp(x97_5_percent), 2), nsmall = 2),
+    or_ci_95_perc = paste0(or, " (", l_or, ", ", u_or, ")"),
+    term = gsub("eval(parse(text = predictor))", "", term, fixed = TRUE)
+  ) %>% select(var, term, or_ci_95_perc, std_error, p_value) %>% 
+  left_join(all_labels, by = "var") %>% relocate(label) %>% select(-c(var))
+```
+
+## Multivariate logistic regression
+
+```{r}
+create_glm_formula <- function(predictors){
+  pt_formula <- ""
+  z <- length(predictors)
+  for (p in predictors){
+    if(p == predictors[[z]]){
+      formula_ip <- paste(noquote(p))
+    } else{
+      formula_ip <- paste(noquote(p), "+ ")
+    }
+    pt_formula <- paste0(pt_formula, formula_ip)
+  }
+  pt_formula <- paste0(noquote("loneliness_det_2cat_f"), " ~ ", 
+                                  pt_formula)
+  pt_formula
+}
+```
+
+### Sociodemographic variables
+
+```{r}
+soc_glm_formula <- create_glm_formula(model_soc_vars_multi)
+soc_log_results <- with(imp_mids, glm(eval(parse(text = soc_glm_formula)), 
+        family = binomial(link = 'logit')))
+
+summary_glm_soc <- summary(pool(soc_log_results), conf.int = T) %>% 
+  as.data.frame() %>% 
+  janitor::clean_names() %>%
+  rowwise() %>%
+  mutate(
+    var = gsub("Yes|Female", "", term),
+    term = gsub(var, "", term),
+    or = format(round(exp(estimate), 2), nsmall = 2),
+    std_error = format(round(std_error, 3), nsmall = 3),
+    p_value = case_when(
+      p_value > 0.2 ~ format(round(p_value, 2), nsmall = 2),
+      p_value <= 0.2 & p_value > 0.05 ~ format(round(p_value, 3), nsmall = 3),
+      (p_value <= 0.05 & p_value > 0.01) ~
+        paste(format(round(p_value, 3), nsmall = 3), "*"),
+      (p_value <= 0.01 & p_value > 0.001) ~
+        paste(format(round(p_value, 3), nsmall = 3), "**"),
+      p_value <= 0.001 ~ paste("< 0.001 ***")
+      ),
+    l_or = format(round(exp(x2_5_percent), 2), nsmall = 2),
+    u_or = format(round(exp(x97_5_percent), 2), nsmall = 2),
+    or_ci_95_perc = paste0(or, " (", l_or, ", ", u_or, ")"),
+    term = gsub("eval(parse(text = predictor))", "", term, fixed = TRUE)
+    ) %>%
+  relocate(var) %>% select(var, term, or_ci_95_perc, std_error, p_value) %>%
+    filter(var != "(Intercept)") %>% 
+  left_join(all_labels, by = "var") %>% relocate(label) %>% select(-c(var))
+```
+
+### Intrapersonal variables
+
+```{r}
+intra_glm_formula <- create_glm_formula(intra_vars)
+intra_log_results <- with(imp_mids, glm(eval(parse(text = intra_glm_formula)), 
+        family = binomial(link = 'logit')))
+
+summary_glm_intra <- summary(pool(intra_log_results), conf.int = T) %>% 
+  as.data.frame() %>% 
+  janitor::clean_names() %>%
+  rowwise() %>%
+  mutate(
+    var = gsub(
+      "Most of the time|Some of the time|Some of the time|None of the time|A little of the time", "", 
+      term),
+    term = gsub(var, "", term),
+    or = format(round(exp(estimate), 2), nsmall = 2),
+    std_error = format(round(std_error, 3), nsmall = 3),
+    p_value = case_when(
+      p_value > 0.2 ~ format(round(p_value, 2), nsmall = 2),
+      p_value <= 0.2 & p_value > 0.05 ~ format(round(p_value, 3), nsmall = 3),
+      (p_value <= 0.05 & p_value > 0.01) ~
+        paste(format(round(p_value, 3), nsmall = 3), "*"),
+      (p_value <= 0.01 & p_value > 0.001) ~
+        paste(format(round(p_value, 3), nsmall = 3), "**"),
+      p_value <= 0.001 ~ paste("< 0.001 ***")
+      ),
+    l_or = format(round(exp(x2_5_percent), 2), nsmall = 2),
+    u_or = format(round(exp(x97_5_percent), 2), nsmall = 2),
+    or_ci_95_perc = paste0(or, " (", l_or, ", ", u_or, ")"),
+    term = gsub("eval(parse(text = predictor))", "", term, fixed = TRUE)
+    ) %>%
+  relocate(var) %>% select(var, term, or_ci_95_perc, std_error, p_value) %>%
+  filter(var != "(Intercept)") %>% 
+  left_join(all_labels, by = "var") %>% relocate(label) %>% select(-c(var))
+```
+
+
+### Interpersonal variables
+
+```{r}
+inter_glm_formula <- create_glm_formula(inter_vars)
+inter_log_results <- with(imp_mids, glm(eval(parse(text = inter_glm_formula)), 
+        family = binomial(link = 'logit')))
+
+summary_glm_inter <- summary(pool(inter_log_results), conf.int = T) %>% 
+  as.data.frame() %>% 
+  janitor::clean_names() %>%
+  rowwise() %>%
+  mutate(
+    var = gsub(
+      "Yes", "", 
+      term),
+    term = gsub(var, "", term),
+    or = format(round(exp(estimate), 2), nsmall = 2),
+    std_error = format(round(std_error, 3), nsmall = 3),
+    p_value = case_when(
+      p_value > 0.2 ~ format(round(p_value, 2), nsmall = 2),
+      p_value <= 0.2 & p_value > 0.05 ~ format(round(p_value, 3), nsmall = 3),
+      (p_value <= 0.05 & p_value > 0.01) ~
+        paste(format(round(p_value, 3), nsmall = 3), "*"),
+      (p_value <= 0.01 & p_value > 0.001) ~
+        paste(format(round(p_value, 3), nsmall = 3), "**"),
+      p_value <= 0.001 ~ paste("< 0.001 ***")
+      ),
+    l_or = format(round(exp(x2_5_percent), 2), nsmall = 2),
+    u_or = format(round(exp(x97_5_percent), 2), nsmall = 2),
+    or_ci_95_perc = paste0(or, " (", l_or, ", ", u_or, ")"),
+    term = gsub("eval(parse(text = predictor))", "", term, fixed = TRUE)
+    ) %>%
+  relocate(var) %>% select(var, term, or_ci_95_perc, std_error, p_value) %>%
+    filter(var != "(Intercept)") %>% 
+  left_join(all_labels, by = "var") %>% relocate(label) %>% select(-c(var)) 
+```
+
+
+```{r}
+uni_glm_ft <- summary_glm_uni %>% 
+  flextable() %>%
+  width(width = 1) %>%
+  set_header_labels(label = "",
+                    term = "",
+                    or_ci_95_perc = "Odds Ratio (95% CI)",
+                    std_error = "Standard Error",
+                    p_value = "P-value") %>%
+  bold(j = 1) %>%
+  align(i = 1, align = "left") %>%
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = c(1,3), width = 2)
+
+uni_glm_ft
+```
+
+```{r}
+soc_glm_ft <- summary_glm_soc %>% 
+  flextable() %>%
+  width(width = 1) %>%
+  set_header_labels(label = "",
+                    term = "",
+                    or_ci_95_perc = "Odds Ratio (95% CI)",
+                    std_error = "Standard Error",
+                    p_value = "P-value") %>%
+  bold(j = 1) %>%
+  align(i = 1, align = "left") %>%
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = c(1,3), width = 2)
+
+soc_glm_ft
+```
+
+```{r}
+intra_glm_ft <- summary_glm_intra %>% 
+  flextable() %>%
+  width(width = 1) %>%
+  set_header_labels(label = "",
+                    term = "",
+                    or_ci_95_perc = "Odds Ratio (95% CI)",
+                    std_error = "Standard Error",
+                    p_value = "P-value") %>%
+  bold(j = 1) %>%
+  align(i = 1, align = "left") %>%
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = c(1,3), width = 2)
+
+intra_glm_ft
+```
+
+```{r}
+inter_glm_ft <- summary_glm_inter %>% 
+  flextable() %>%
+  width(width = 1) %>%
+  set_header_labels(label = "",
+                    term = "",
+                    or_ci_95_perc = "Odds Ratio (95% CI)",
+                    std_error = "Standard Error",
+                    p_value = "P-value") %>%
+  bold(j = 1) %>%
+  align(i = 1, align = "left") %>%
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = c(1,3), width = 2)
+
+inter_glm_ft
+```
+
+# Univariate Logistic Regression 3
+
+```{r}
+log_results3 <- lapply(multi_model_vars, function(predictor) {
+    glm_out <- with(imp_mids, glm(ucla3_2cat ~ 
+        eval(parse(text = predictor)), 
+        family = binomial(link = 'logit')))
+    summary_glm <- summary(pool(glm_out), conf.int = T)  %>% as.data.frame() %>% 
+    janitor::clean_names() %>%
+    mutate(
+      var = predictor
+    ) %>%
+    relocate(var)
+  })
+
+# Combine the results into a list
+glm_out_df3<- do.call(rbind, log_results3) %>% as.data.frame()
+```
+
+```{r}
+summary_glm_uni3 <- glm_out_df3 %>%
+  # Remove intercept rows
+  filter(term != "(Intercept)") %>%
+  mutate(
+    or = format(round(exp(estimate), 2), nsmall = 2),
+    std_error = format(round(std_error, 3), nsmall = 3),
+    p_value = case_when(
+      p_value > 0.2 ~ format(round(p_value, 2), nsmall = 2),
+      p_value <= 0.2 & p_value > 0.05 ~ format(round(p_value, 3), nsmall = 3),
+      (p_value <= 0.05 & p_value > 0.01) ~
+        paste(format(round(p_value, 3), nsmall = 3), "*"),
+      (p_value <= 0.01 & p_value > 0.001) ~
+        paste(format(round(p_value, 3), nsmall = 3), "**"),
+      p_value <= 0.001 ~ paste("< 0.001 ***")
+      ),
+    l_or = format(round(exp(x2_5_percent), 2), nsmall = 2),
+    u_or = format(round(exp(x97_5_percent), 2), nsmall = 2),
+    or_ci_95_perc = paste0(or, " (", l_or, ", ", u_or, ")"),
+    term = gsub("eval(parse(text = predictor))", "", term, fixed = TRUE)
+  ) %>% select(var, term, or_ci_95_perc, std_error, p_value) %>% 
+  left_join(all_labels, by = "var") %>% relocate(label) %>% select(-c(var))
+```
+
+```{r}
+uni_glm_ft3 <- summary_glm_uni3 %>% 
+  flextable() %>%
+  width(width = 1) %>%
+  set_header_labels(label = "",
+                    term = "",
+                    or_ci_95_perc = "Odds Ratio (95% CI)",
+                    std_error = "Standard Error",
+                    p_value = "P-value") %>%
+  bold(j = 1) %>%
+  align(i = 1, align = "left") %>%
+  font(fontname = "Arial", part = "all") %>%
+  fontsize(size = 10, part = "all") %>%
+  width(j = c(1,3), width = 2)
+
+uni_glm_ft3
+```
+
+# Create Word Document
+
+```{r, eval = FALSE}
+# Open word file as an object
+ucla_desc_tables_doc <- read_docx(here::here("exploratory", "officer_template.docx"))
+
+ucla_desc_tables_doc <- ucla_desc_tables_doc %>%
+  body_add_par("UCLA Loneliness Scale Descriptive Statistics", style = "Title") %>%
+  body_add_flextable(ls_tab, align = "left") %>%
+  body_add_par(value = "") %>%
+  body_add_gg(ls_plot, height = 3.41, width = 4.09) %>%
+  body_add_par(value = "") %>%
+  body_add_par("Individuals with loneliness scale total scores of 5 or less were categorized as not lonely while those with scores of 6 or greater were categorized as lonely. Five imputations of the data were produced using the R MICE package with different imputed values. These values were pooled using Rubin's rules.", 
+               style = "Normal") %>%
+  
+  # Original data
+  body_add_par("Original Data with Missing Values", style = "heading 1") %>%
+  body_add_flextable(original_tab, align = "left") %>%
+  body_add_par(value = "") %>%
+  
+  # Original data excluding imputed data
+  body_add_par("Variables without Missing Values", style = "heading 1") %>%
+  body_add_flextable(no_missing_tab, align = "left") %>%
+  body_add_par(value = "") %>%  
+  
+  # Imputed data
+  body_add_par("Imputed Data", style = "heading 1") %>%
+  body_add_flextable(ft, align = "left") %>%
+  body_add_par(value = "") %>%
+  
+  # Univariate Logistic Regression Results
+  body_add_par("Univariate Logistic Regression Results", style = "heading 1") %>%
+  body_add_flextable(uni_glm_ft, align = "left") %>%
+  body_add_par(value = "") %>%  
+  
+  # Multivariate Logistic Regression Results - Sociodemographic Variables 
+  body_add_par("Multivariate Logistic Regression Results - Sociodemographic Variables", 
+               style = "heading 1") %>%
+  body_add_par("The following reference variables were excluded from the model: White, Straight, Married, Some high school (no diploma), $10,000 or less", 
+               style = "Normal") %>%
+  body_add_par(value = "") %>%
+  body_add_flextable(soc_glm_ft, align = "left") %>%
+  body_add_par(value = "") %>% 
+  
+  # Multivariate Logistic Regression Results - Intrapersonal Variables 
+  body_add_par("Multivariate Logistic Regression Results - Intrapersonal Variables", 
+               style = "heading 1") %>%
+  body_add_flextable(intra_glm_ft, align = "left") %>%
+  body_add_par(value = "") %>% 
+
+  # Multivariate Logistic Regression Results - Interpersonal Variables 
+  body_add_par("Multivariate Logistic Regression Results - Interpersonal Variables", 
+               style = "heading 1") %>%
+  body_add_flextable(inter_glm_ft, align = "left") %>%
+  body_add_par(value = "") %>% 
+
+  # Univariate Logistic Regression Results 3 vs other values
+  body_add_par("Univariate Logistic Regression Results UCLA LS Score of 3", 
+               style = "heading 1") %>%
+  body_add_flextable(uni_glm_ft3, align = "left") %>%
+  body_add_par(value = "") %>%  
+
+
+# print the word document
+print(ucla_desc_tables_doc, 
+      target = here::here("exploratory", "ucla_loneliness_scale", 
+                          "UCLA_loneliness_scale_descriptive_tables.docx"))
+```
+
+
